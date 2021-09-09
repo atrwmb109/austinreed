@@ -1,0 +1,801 @@
+import numpy as np
+import Ngl, Nio
+import xarray as xr
+import pyproj
+from pyproj import _datadir, datadir
+import fiona
+import statistics
+import math
+import scipy.stats
+from statistics import mean
+from scipy import stats
+from sklearn.linear_model import LinearRegression
+import pandas as pd
+import datetime as dt
+import dateutil
+import tropycal.tracks as tracks
+import sys
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+from cartopy.feature import NaturalEarthFeature
+
+np.set_printoptions(threshold=sys.maxsize)
+
+#CPC
+#load in precip data
+
+f = "/home/metlab/austinreedpythonscripts/cpc_ncfiles/CPC_gauge_precip_1948-2020.nc" #location and name of file
+DS1 = xr.open_mfdataset(f, concat_dim="time") #this command opens the file using xarray
+#print(DS1)
+ts = DS1.time.values
+ts_1 = DS1.time
+data_lat = DS1.lat.values[:] #you must read in the latitude and longitude variables for plotting, but remember they might not be named "lat" and "lon" in your file
+data_lon = DS1.lon.values[:]
+#print(data_lon)
+new_data_lon = ((data_lon) - 180)*(-1)
+#print(new_data_lon)
+
+#print(np.shape(data_lat))
+#print(np.shape(data_lon))
+
+rad = 4.*np.arctan(1.)/180.
+#print(rad)
+
+clat = np.cos(data_lat*rad)
+#data_lat = y
+#data_lon = x
+nlats = len(data_lat[:])
+nlons = len(data_lon[:])
+#print(data_lat[0,0])
+#print(data_lon[0,0])
+#print(data_lat[nlats-1,0])
+
+#print(np.shape(data_lat))
+#print(np.shape(data_lon))
+#print(data_lon)
+#print(np.shape(nlats))
+#print(np.shape(nlons))
+print(nlats)
+print(nlons)
+
+#lon_grid, lat_grid = np.meshgrid(x,y)
+#print (DS1)
+#wgs84 = pyproj.Proj("+init=EPSG:4326") # LatLon with WGS84 datum used by GPS units and Google Earth
+#cpc = pyproj.Proj("+proj=lcc +lat_1=25 +lat_2=60 +lat_0=42.5 +lon_0=-100 +ellps=WGS84 +units=m +no_defs ")
+
+
+#xx, yy = pyproj.transform(daymet, wgs84, lon_grid, lat_grid)
+data = DS1.precip.values #this is the variable that you want to read in, for example, temperature or precipitation so change "var_name" to the name of your variable in the netcdf file
+data_1 = DS1.precip
+print(data_1)
+
+#Make CPC dates to match in correct format with HURDAT dates
+cpc_dates = np.zeros((np.shape(ts)))
+print(cpc_dates)
+ntimes_1 = (np.shape(ts))[0]
+print(ntimes_1)
+for i in range(ntimes_1):
+    #daymet_dates[i] = int(str(int(ts[i]))[0:3]+str(int(ts[i]))[4:6]+str(int(ts[i]))[7:9])
+        #daymet_dates[i] = int(str(int(ts[i]))[0:11])
+    #daymet_dates[i] = str(ts[i])[0:3]
+    cpc_dates[i] = int(str(ts[i])[0:4] + str(ts[i])[5:7]+ str(ts[i])[8:10])
+    #daymet_dates[i] = (ts[i])[0:3]
+    #print (ts[i])
+    #print (type(ts[i]))
+print(cpc_dates)
+
+#print(np.shape(data))
+#annual_sums = data.resample(time="y").all(axis = 0)
+#print(np.shape(annual_sums))
+#print (np.shape(data))
+
+daily_sums_1 = data_1.resample(time = "y").max(dim = "time").values
+daily_sums_2 = data_1.resample(time = "y").max(dim= ("lat","lon")).values
+
+print(daily_sums_1)
+print("The shape of daily sums 1 is", np.shape(daily_sums_1))
+print(daily_sums_2)
+print("The shape of daily sums 2 is", np.shape(daily_sums_2))
+#print(np.nanmean(daily_sums_1))
+#print(np.nanmax(daily_sums_1))
+#print(np.shape(daily_sums_1))
+
+
+
+
+annual_sums_1 = data_1.resample(time="y").sum(dim="time").values
+
+nyyears = np.shape(annual_sums_1)[0]
+#print(nyyears)
+
+
+annual_sums=np.add.reduceat(data, np.arange(0, len(data), 365))
+#daily_sums = data_1.resample(time="y").max(dim="time").values
+
+nyyears_1 = np.shape(daily_sums_1)[0]
+#print(nyyears_1)
+
+#ts = DS1.time
+
+
+time_avg= (np.mean(annual_sums,axis=0))
+
+
+
+
+#----------------------------------------------------------------------
+# Main code
+#----------------------------------------------------------------------
+
+#---Rough area that covers Long Island Area
+#minlat = 40.25
+#maxlat = 41.5
+#minlon = -74.5
+#maxlon = -71.5
+#---Name of shapefile that contains U.S county outlines
+shapefile_name = "/home/metlab/gadm36_USA_shp/gadm36_USA_2.shp"
+#----------------------------------------------------------------------
+# Mask for Long Island
+#----------------------------------------------------------------------
+
+# Get every lat/lon pair of the original data array, and
+# turn them into 1D arrays.  We will use these 1D arrays
+# when checking which lat/lon pairs fall in which counties
+# of NY.
+
+
+#Open the shapefile
+shpf = Nio.open_file(shapefile_name,"r")
+#Read data off the shapefile
+segsDims = (shpf.variables['segments']).shape
+geometry = shpf.variables['geometry'][:]
+segments = shpf.variables['segments'][:]
+geomDims = (shpf.variables['geometry']).shape
+numFeatures = geomDims[0]
+#Read global attributes  
+geom_segIndex = shpf.geom_segIndex
+geom_numSegs  = shpf.geom_numSegs
+segs_xyzIndex = shpf.segs_xyzIndex
+segs_numPnts  = shpf.segs_numPnts
+
+#Read the lat/lon data off the shapefile
+lat = shpf.variables['y'][:]
+lon = shpf.variables['x'][:]
+#print(lon)
+
+#Read the state and county names off the file
+names1 = shpf.variables['NAME_1'][:] # State names
+names2 = shpf.variables['NAME_2'][:] # County names
+
+
+#Grab the indexes containing the New York counties.
+names1_fixed = []
+
+for i in range(len(names1)):
+    elementstring = str(names1[i])[2:]
+    names1_fixed.append(elementstring[:-1])
+print(type(names1_fixed[0]))
+names1_array = np.array(names1_fixed)
+print(type(names1_array))
+
+names2_fixed = []
+
+for i in range(len(names2)):
+    elementstring = str(names2[i])[2:]
+    names2_fixed.append(elementstring[:-1])
+print(type(names2_fixed[0]))
+names2_array = np.array(names2_fixed)
+print(type(names2_array))
+
+
+
+#Grab the indexes containing the NY counties
+
+#ny_counties = np.where((names1_array == 'New York') and (names2_array == 'Kings') or (names1_array == 'New York') and (names2_array == 'Queens') or (names1_array == 'New York') and (names2_array == 'Nassau') or (names1_array == 'New York') and (names2_array == 'Suffolk'))
+#ny_counties_array = np.array(ny_counties)[:]
+ny_counties = np.where((names1_array == 'New York') & (names2_array == 'Kings') | (names1_array == 'New York') & (names2_array == 'Queens') | (names1_array == 'New York') & (names2_array == 'Nassau') | (names1_array == 'New York') & (names2_array == 'Suffolk'))[0]
+#ny_counties = np.where((names1_array == 'New York') & (names2_array == 'Nassau') | (names1_array == 'New York') & (names2_array == 'Queens') | (names1_array == 'New York') & (names2_array == 'Kings'))[0]
+#ny_counties = np.where((names1_array == 'New York') & (names2_array == 'Suffolk'))[0]
+nnyc = len(ny_counties)
+ny_county_list = []
+print(nnyc)
+print(ny_counties)
+nyyears = (np.shape(daily_sums_1))[0]
+#for i in np.arange(ny_counties[0],ny_counties[-1]+1,1):
+#    ny_county_list.append(names2_fixed[i])
+
+#Create an array to hold new data mask, and set all values to 0 initially
+test_array = np.full_like(time_avg,np.nan)
+test_array_li = np.full_like(time_avg,np.nan)
+#test_array2 = np.ma.MaskedArray(test_array,mask=np.isnan(test_array))
+#test_array2 = np.ma.MaskedArray(test_array,mask=np.isnan(test_array))
+for shapes in fiona.open(shapefile_name):
+    geom_type = shapes['geometry']['type']
+    geom_coords = shapes['geometry']['coordinates']
+    #if int(shapes['id']) == ny_counties[2]:
+    #if int(shapes['id']) == ny_counties[0]:
+    if int(shapes['id']) == ny_counties[0] or int(shapes['id']) == ny_counties[1] or int(shapes['id']) == ny_counties[2] or int(shapes['id']) == ny_counties[3]:
+        print("Masking" + names2_array[int(shapes['id'])])
+        for part in geom_coords:
+              part_squeeze = np.squeeze(part)
+              part_shape = np.shape(part_squeeze)
+              lats = []
+              lons = []
+              for i in range(part_shape[0]):
+                  lons.append(part_squeeze[i][0])
+                  lats.append(part_squeeze[i][1])
+              maxlat = max(lats)
+              maxlon = max(lons)
+              minlat = min(lats)
+              minlon = min(lons)
+              for k in range(0,nlats):
+                  for l in range(0,nlons):
+                      if data_lat[k] <= maxlat and data_lat[k] >= minlat and new_data_lon[l] <= maxlon and new_data_lon[l] >= minlon:
+                          #print (data_lat[k], new_data_lon[l])
+                          dist = Ngl.gc_inout(data_lat[k],new_data_lon[l], lats,lons)
+                          if dist != 0:
+                              #print(dist)
+                              test_array[k,l] = time_avg[k,l]
+                              test_array_li[k,l] = 1
+
+
+
+percentile95=[]
+#print(np.shape(zeros_array))
+for i in range(2001,2021,1):
+    print(i)
+    year_of_data = data_1.sel(time = slice(str(i)+"-01-01",str(i)+"-12-31")).values
+    #print(year_of_data)
+    #print(np.shape(year_of_data))
+    time_oneyear = ts_1.sel(time=slice(str(i)+"-01-01", str(i) +"-12-31")).values
+    #print(np.shape(time_oneyear))
+    newest_array = year_of_data*test_array_li
+    #newest_array_arr = np.array(newest_array)
+    #newest_array_flattened = np.reshape(newest_array,np.shape())
+    sorted_array = np.sort(newest_array,axis=0)
+    longisland95th = np.nanpercentile(sorted_array, q= 95,axis=0)
+    #print(np.shape(longisland95th))
+    percentile95.append(longisland95th)
+percentile_averaged = np.nanmean(percentile95, axis = 0)
+print(percentile_averaged)
+print(np.nanmin(percentile_averaged))
+print(np.nanmax(percentile_averaged))
+
+
+#IMERG
+
+
+#load in precip data
+f = "/home/metlab/austinreedpythonscripts/imergncfiles/*.nc4" #location and name of file
+DS1 = xr.open_mfdataset(f, concat_dim="time") #this command opens the file using xarray
+ts_1 = DS1.time
+ts = DS1.time.values
+print(ts)
+
+imerg_data_lat = DS1.lat.values[:] #you must read in the latitude and longitude variables for plotting, but remember they might not be named "lat" and "lon" in your file
+imerg_data_lon = DS1.lon.values[:]
+
+
+nlats = len(imerg_data_lat[:])
+nlons = len(imerg_data_lon[:])
+
+
+#wgs84 = pyproj.Proj("+init=EPSG:4326") # LatLon with WGS84 datum used by GPS units and Google Earth
+#daymet = pyproj.Proj("+proj=lcc +lat_1=25 +lat_2=60 +lat_0=42.5 +lon_0=-100 +ellps=WGS84 +units=m +no_defs ")
+
+
+#xx, yy = pyproj.transform(daymet, wgs84, lon_grid, lat_grid)
+data = DS1.precipitationCal.values #this is the variable that you want to read in, for example, temperature or precipitation so change "var_name" to the name of your variable in the netcdf file
+data_1 = DS1.precipitationCal
+#data_new = np.transpose(data)
+#print(np.shape(data_new))
+#data_1_new = np.transpose(data_1)
+#print(np.shape(data_1_new))
+
+
+#Make DAYMET dates to match in correct format with HURDAT dates
+imerg_dates = np.zeros((np.shape(ts)))
+print(imerg_dates)
+ntimes_1 = (np.shape(ts))[0]
+print(ntimes_1)
+for i in range(ntimes_1):
+    #daymet_dates[i] = int(str(int(ts[i]))[0:3]+str(int(ts[i]))[4:6]+str(int(ts[i]))[7:9])
+        #daymet_dates[i] = int(str(int(ts[i]))[0:11])
+    #daymet_dates[i] = str(ts[i])[0:3]
+    imerg_dates[i] = int(str(ts[i])[0:4] + str(ts[i])[5:7]+ str(ts[i])[8:10])
+    #daymet_dates[i] = (ts[i])[0:3]
+    #print (ts[i])
+    #print (type(ts[i]))
+print(imerg_dates)
+
+annual_sums_1 = data_1.resample(time="y").sum(dim="time").values
+#print(annual_sums_1)
+print(np.shape(annual_sums_1))
+#annual_sums_new = np.transpose(annual_sums_1)
+nyyears = np.shape(annual_sums_1)[0]
+
+annual_sums=np.add.reduceat(data, np.arange(0, len(data), 365))
+#daily_sums = data_1.resample(time="y").max(dim="time").values
+
+
+#daily_sums_object = data_1.resample(time="y").max(dim="time")
+#nyyears_1 = np.shape(daily_sums)[0]
+
+#ts = DS1.time
+#print(ts)
+#print(np.shape(ts))
+
+time_avg= (np.mean(annual_sums,axis=0))
+print(np.shape(time_avg))
+
+
+
+#Define bounding box within Long Island region
+min_lat = 40.25
+max_lat = 41.5
+min_lon = -74.5
+max_lon = -71.5
+
+#np.where(minlat < x< maxlat and minlon <x< maxlon)
+
+
+#----------------------------------------------------------------------
+# Main code
+#----------------------------------------------------------------------
+
+#---Rough area that covers Long Island Area
+#minlat = 40.25
+#maxlat = 41.5
+#minlon = -74.5
+#maxlon = -71.5
+#---Name of shapefile that contains U.S county outlines
+shapefile_name = "/home/metlab/gadm36_USA_shp/gadm36_USA_2.shp"
+#----------------------------------------------------------------------
+# Shapefile Mask for Long Island
+#----------------------------------------------------------------------
+
+# Get every lat/lon pair of the original data array, and
+# turn them into 1D arrays.  We will use these 1D arrays
+# when checking which lat/lon pairs fall in which counties
+# of NY.
+
+
+#Open the shapefile
+shpf = Nio.open_file(shapefile_name,"r")
+#Read data off the shapefile
+segsDims = (shpf.variables['segments']).shape
+geometry = shpf.variables['geometry'][:]
+segments = shpf.variables['segments'][:]
+geomDims = (shpf.variables['geometry']).shape
+numFeatures = geomDims[0]
+#Read global attributes  
+geom_segIndex = shpf.geom_segIndex
+geom_numSegs  = shpf.geom_numSegs
+segs_xyzIndex = shpf.segs_xyzIndex
+segs_numPnts  = shpf.segs_numPnts
+
+#Read the lat/lon data off the shapefile
+lat = shpf.variables['y'][:]
+lon = shpf.variables['x'][:]
+
+#Read the state and county names off the file
+names1 = shpf.variables['NAME_1'][:] # State names
+names2 = shpf.variables['NAME_2'][:] # County names
+
+
+#Grab the indexes containing the New York counties.
+names1_fixed = []
+
+for i in range(len(names1)):
+    elementstring = str(names1[i])[2:]
+    names1_fixed.append(elementstring[:-1])
+#print(type(names1_fixed[0]))
+names1_array = np.array(names1_fixed)
+#print(type(names1_array))
+
+names2_fixed = []
+
+for i in range(len(names2)):
+    elementstring = str(names2[i])[2:]
+    names2_fixed.append(elementstring[:-1])
+#print(type(names2_fixed[0]))
+names2_array = np.array(names2_fixed)
+#print(type(names2_array))
+
+
+
+#Grab the indexes containing the NY counties
+
+
+ny_counties = np.where((names1_array == 'New York') & (names2_array == 'Kings') | (names1_array == 'New York') & (names2_array == 'Queens') | (names1_array == 'New York') & (names2_array == 'Nassau') | (names1_array == 'New York') & (names2_array == 'Suffolk'))[0]
+
+
+nnyc = len(ny_counties)
+ny_county_list = []
+#print(nnyc)
+#print(ny_counties)
+
+
+#Create an array to hold new data mask, and set all values to 0 initially
+#test_array_li = np.zeros_like(time_avg)
+test_array_li = np.full_like(time_avg,np.nan)
+test_array = np.full_like(time_avg,np.nan)
+#test_array2 = np.ma.MaskedArray(test_array, mask=np.isnan(test_array))
+#test_array = np.full_like(time_avg,0)
+for shapes in fiona.open(shapefile_name):
+    geom_type = shapes['geometry']['type']
+    geom_coords = shapes['geometry']['coordinates']
+    if int(shapes['id']) == ny_counties[0] or int(shapes['id']) == ny_counties[1] or int(shapes['id']) == ny_counties[2] or int(shapes['id']) == ny_counties[3]:
+        print("Masking" + names2_array[int(shapes['id'])])
+        for part in geom_coords:
+            part_squeeze = np.squeeze(part)
+            part_shape = np.shape(part_squeeze)
+            lats = []
+            lons = []
+            for i in range(part_shape[0]):
+                lons.append(part_squeeze[i][0])
+                lats.append(part_squeeze[i][1])
+            maxlat = max(lats)
+            maxlon = max(lons)
+            minlat = min(lats)
+            minlon = min(lons)
+            for k in range(0,nlats):
+                for l in range(0,nlons):
+                    if imerg_data_lat[k] <= maxlat and imerg_data_lat[k] >= minlat and imerg_data_lon[l] <= maxlon and imerg_data_lon[l] >= minlon:
+                        dist = Ngl.gc_inout(imerg_data_lat[k],imerg_data_lon[l], lats,lons)
+                        if dist != 0:
+                            test_array[l,k] = time_avg[l,k]
+                            test_array_li[l,k] = 1
+#test_array_new = np.transpose(test_array)
+#test_array_li_new = np.transpose(test_array_li)
+#print(np.shape(test_array_new))
+#print(np.shape(test_array_li_new))
+
+
+#95th- non-averaged approach
+
+daily_precip = []
+dateslist95th = []
+percentile95 = []
+newdates = []
+matchingdates = []
+
+
+#print(np.shape(zeros_array))
+
+
+for i in range(2001,2021,1):
+    print(i)
+    year_of_data = data_1.sel(time = slice(str(i)+"-01-01",str(i)+"-12-31")).values
+    #print(year_of_data)
+    #print(np.shape(year_of_data))
+    time_oneyear = ts_1.sel(time=slice(str(i)+"-01-01", str(i) +"-12-31")).values
+    #print(np.shape(time_oneyear))
+    newest_array = year_of_data*test_array_li
+    print(np.shape(newest_array))
+    #newest_array_arr = np.array(newest_array)
+    #newest_array_flattened = np.reshape(newest_array,np.shape())
+    sorted_array = np.sort(newest_array,axis=0)
+    longisland95th = np.nanpercentile(sorted_array, q= 95,axis=0)
+    #print(np.shape(longisland95th))
+    percentile95.append(longisland95th)
+    #print(percentile95)
+percentile_averaged1 = np.nanmean(percentile95, axis = 0)
+percentile_transposed = np.transpose(percentile_averaged1)
+#print(np.shape(percentile_transposed))
+
+print(percentile_transposed)
+print(np.nanmin(percentile_transposed))
+print(np.nanmax(percentile_transposed))
+
+
+#DAYMET
+#load in precip data
+f = "/home/metlab/austinreedpythonscripts/daymetncfiles/*.nc" #location and name of file
+DS1 = xr.open_mfdataset(f, chunks = {"time":5, "lon":289, "lat":253},concat_dim="time") #this command opens the file using xarray
+ts_1 = DS1.time
+ts = DS1.time.values
+print(ts)
+
+daymet_data_lat = DS1.lat.values[0,:,:] #you must read in the latitude and longitude variables for plotting, but remember they might not be named "lat" and "lon" in your file
+daymet_data_lon = DS1.lon.values[0,:,:]
+
+
+nlats = len(daymet_data_lat[:,0])
+nlons = len(daymet_data_lon[0,:])
+
+
+
+#xx, yy = pyproj.transform(daymet, wgs84, lon_grid, lat_grid)
+data = DS1.prcp.values #this is the variable that you want to read in, for example, temperature or precipitation so change "var_name" to the name of your variable in the netcdf file
+data_1 = DS1.prcp
+
+#Make DAYMET dates to match in correct format with HURDAT dates
+daymet_dates = np.zeros((np.shape(ts)))
+print(daymet_dates)
+ntimes_1 = (np.shape(ts))[0]
+print(ntimes_1)
+for i in range(ntimes_1):
+    #daymet_dates[i] = int(str(int(ts[i]))[0:3]+str(int(ts[i]))[4:6]+str(int(ts[i]))[7:9])
+        #daymet_dates[i] = int(str(int(ts[i]))[0:11])
+    #daymet_dates[i] = str(ts[i])[0:3]
+    daymet_dates[i] = int(str(ts[i])[0:4] + str(ts[i])[5:7]+ str(ts[i])[8:10])
+    #daymet_dates[i] = (ts[i])[0:3]
+    #print (ts[i])
+    #print (type(ts[i]))
+print(daymet_dates)
+
+annual_sums_1 = data_1.resample(time="y").sum(dim="time").values
+
+nyyears = np.shape(annual_sums_1)[0]
+
+annual_sums=np.add.reduceat(data, np.arange(0, len(data), 365))
+#daily_sums = data_1.resample(time="y").max(dim="time").values
+
+
+#daily_sums_object = data_1.resample(time="y").max(dim="time")
+#nyyears_1 = np.shape(daily_sums)[0]
+
+#ts = DS1.time
+#print(ts)
+#print(np.shape(ts))
+
+time_avg= (np.mean(annual_sums,axis=0))
+
+
+
+
+#Define bounding box within Long Island region
+min_lat = 40.25
+max_lat = 41.5
+min_lon = -74.5
+max_lon = -71.5
+
+#np.where(minlat < x< maxlat and minlon <x< maxlon)
+
+
+#----------------------------------------------------------------------
+# Main code
+#----------------------------------------------------------------------
+
+#---Rough area that covers Long Island Area
+#minlat = 40.25
+#maxlat = 41.5
+#minlon = -74.5
+#maxlon = -71.5
+#---Name of shapefile that contains U.S county outlines
+shapefile_name = "/home/metlab/gadm36_USA_shp/gadm36_USA_2.shp"
+#----------------------------------------------------------------------
+# Shapefile Mask for Long Island
+#----------------------------------------------------------------------
+
+# Get every lat/lon pair of the original data array, and
+# turn them into 1D arrays.  We will use these 1D arrays
+# when checking which lat/lon pairs fall in which counties
+# of NY.
+
+
+#Open the shapefile
+shpf = Nio.open_file(shapefile_name,"r")
+#Read data off the shapefile
+segsDims = (shpf.variables['segments']).shape
+geometry = shpf.variables['geometry'][:]
+segments = shpf.variables['segments'][:]
+geomDims = (shpf.variables['geometry']).shape
+numFeatures = geomDims[0]
+#Read global attributes  
+geom_segIndex = shpf.geom_segIndex
+geom_numSegs  = shpf.geom_numSegs
+segs_xyzIndex = shpf.segs_xyzIndex
+segs_numPnts  = shpf.segs_numPnts
+
+#Read the lat/lon data off the shapefile
+lat = shpf.variables['y'][:]
+lon = shpf.variables['x'][:]
+
+#Read the state and county names off the file
+names1 = shpf.variables['NAME_1'][:] # State names
+names2 = shpf.variables['NAME_2'][:] # County names
+
+
+#Grab the indexes containing the New York counties.
+names1_fixed = []
+
+for i in range(len(names1)):
+    elementstring = str(names1[i])[2:]
+    names1_fixed.append(elementstring[:-1])
+#print(type(names1_fixed[0]))
+names1_array = np.array(names1_fixed)
+#print(type(names1_array))
+
+names2_fixed = []
+
+for i in range(len(names2)):
+    elementstring = str(names2[i])[2:]
+    names2_fixed.append(elementstring[:-1])
+#print(type(names2_fixed[0]))
+names2_array = np.array(names2_fixed)
+#print(type(names2_array))
+
+
+
+#Grab the indexes containing the NY counties
+
+
+ny_counties = np.where((names1_array == 'New York') & (names2_array == 'Kings') | (names1_array == 'New York') & (names2_array == 'Queens') | (names1_array == 'New York') & (names2_array == 'Nassau') | (names1_array == 'New York') & (names2_array == 'Suffolk'))[0]
+
+
+nnyc = len(ny_counties)
+ny_county_list = []
+#print(nnyc)
+#print(ny_counties)
+
+
+#Create an array to hold new data mask, and set all values to 0 initially
+#test_array_li = np.zeros_like(time_avg)
+test_array_li = np.full_like(time_avg,np.nan)
+test_array = np.full_like(time_avg,np.nan)
+#test_array2 = np.ma.MaskedArray(test_array, mask=np.isnan(test_array))
+#test_array = np.full_like(time_avg,0)
+for shapes in fiona.open(shapefile_name):
+    geom_type = shapes['geometry']['type']
+    geom_coords = shapes['geometry']['coordinates']
+    if int(shapes['id']) == ny_counties[0] or int(shapes['id']) == ny_counties[1] or int(shapes['id']) == ny_counties[2] or int(shapes['id']) == ny_counties[3]:
+        print("Masking" + names2_array[int(shapes['id'])])
+        for part in geom_coords:
+            part_squeeze = np.squeeze(part)
+            part_shape = np.shape(part_squeeze)
+            lats = []
+            lons = []
+            for i in range(part_shape[0]):
+                lons.append(part_squeeze[i][0])
+                lats.append(part_squeeze[i][1])
+            maxlat = max(lats)
+            maxlon = max(lons)
+            minlat = min(lats)
+            minlon = min(lons)
+            for k in range(0,nlats):
+                for l in range(0,nlons):
+                    if daymet_data_lat[k,l] <= maxlat and daymet_data_lat[k,l] >= minlat and daymet_data_lon[k,l] <= maxlon and daymet_data_lon[k,l] >= minlon:
+                        dist = Ngl.gc_inout(daymet_data_lat[k,l],daymet_data_lon[k,l], lats,lons)
+                        if dist != 0:
+                            test_array[k,l] = time_avg[k,l]
+                            test_array_li[k,l] = 1
+
+
+#95th- non-averaged approach
+
+daily_precip = []
+dateslist95th = []
+percentile95 = []
+newdates = []
+matchingdates = []
+
+#print(np.shape(zeros_array))
+
+
+for i in range(2001,2021,1):
+    print(i)
+    year_of_data = data_1.sel(time = slice(str(i)+"-01-01",str(i)+"-12-31")).values
+    #print(year_of_data)
+    #print(np.shape(year_of_data))
+    time_oneyear = ts_1.sel(time=slice(str(i)+"-01-01", str(i) +"-12-31")).values
+    #print(np.shape(time_oneyear))
+    newest_array = year_of_data*test_array_li
+    #newest_array_arr = np.array(newest_array)
+    #newest_array_flattened = np.reshape(newest_array,np.shape())
+    sorted_array = np.sort(newest_array,axis=0)
+    longisland95th = np.nanpercentile(sorted_array, q= 95,axis=0)
+    #print(longisland95th)
+    #print(np.nanmax(longisland95th))
+    #print(np.shape(longisland95th))
+    percentile95.append(longisland95th)
+percentile_averaged2 = np.nanmean(percentile95, axis =0)
+print(percentile_averaged2)
+print(np.nanmin(percentile_averaged2))
+print(np.nanmax(percentile_averaged2))
+
+
+
+#Spatial panel plots
+
+
+#with real data
+fig = plt.figure(figsize=(20,13))
+# Set height padding for plots
+fig.set_constrained_layout_pads(w_pad=0., h_pad=0.1, hspace=0., wspace=0.)
+#First plot: DAYMET
+contours = np.linspace(5,22,num=40)
+ax_daymet = fig.add_subplot(3,1,3,projection=ccrs.PlateCarree())
+ax_daymet.set_extent([-74.041867, -71.85615, 40.541722, 41.292377])
+gl = ax_daymet.gridlines(draw_labels=True,alpha = 0.3)
+gl.xlabels_top = gl.ylabels_right = False
+gl.xformatter = LONGITUDE_FORMATTER
+gl.yformatter = LATITUDE_FORMATTER
+gl.xlabel_style = {'size': 15}
+gl.ylabel_style = {'size': 15}
+coast = NaturalEarthFeature(category='physical', scale='10m',
+                            facecolor='none', name='coastline')
+feature = ax_daymet.add_feature(coast, edgecolor='black')
+
+plot1 = ax_daymet.pcolormesh(daymet_data_lon,daymet_data_lat,percentile_averaged2, cmap='Blues',vmin = np.nanmin(contours),vmax = np.nanmax(contours))
+#plot1 = ax_daymet.pcolormesh([0,1], cmap='Blues')
+
+ax_daymet.set_title('DAYMET',fontsize = 22,fontweight = 'bold')
+#fig.colorbar(plot1,ax = ax_daymet, orientation = 'horizontal', shrink = 0.5)
+#ax_cb = fig.add_subplot(4,1,4)
+
+cbar_ax = fig.add_axes([0.75, 0.15, 0.05, 0.7])
+#cbar = fig.colorbar(plot1, cax = ax_cb, orientation = 'horizontal', shrink = 0.5)
+cbar = fig.colorbar(plot1, cax = cbar_ax, orientation = 'vertical', pad = 0.05)
+font_size = 14 # Adjust as appropriate.
+cbar.ax.tick_params(labelsize=font_size)
+
+
+#cbar_ax = fig.add_axes([0.92, 0.15, 0.05, 0.7])
+#cbar_ax = fig.add_axes([0.1, 0.1, 0.03, 0.8])
+#cbar = fig.colorbar(plot1, cax = ax_cb, orientation = 'horizontal',aspect = 1./20.)
+#cbar = fig.colorbar(plot1, cax = cbar_ax, orientation = 'vertical',pad = 0.05)
+#ticklabs = cbar.ax.get_yticklabels()
+#cbar.ax.set_yticklabels(ticklabs, fontsize=10)
+#divider = make_axes_locatable(ax_cb)
+#cax = divider.append_axes("bottom", size ="7%", pad = "2%")
+#cax = divider.new_vertical(size=0.2, pad=0.7, pack_start = True,axes_class = maxes.Axes)
+#fig.add_axes(cax)
+#fig.colorbar(plot1, cax= cax, orientation = 'horizontal')
+#fig.add_axes(cax)
+
+
+
+
+
+#Second plot: IMERG
+contours = np.linspace(0.5,30,num=40)
+ax_imerg = fig.add_subplot(3,1,2,projection=ccrs.PlateCarree())
+ax_imerg.set_extent([-74.041867, -71.85615, 40.541722, 41.292377])
+gl = ax_imerg.gridlines(draw_labels=True,alpha = 0.3)
+gl.xlabels_top = gl.ylabels_right = False
+gl.xformatter = LONGITUDE_FORMATTER
+gl.yformatter = LATITUDE_FORMATTER
+gl.xlabel_style = {'size': 15}
+gl.ylabel_style = {'size': 15}
+coast = NaturalEarthFeature(category='physical', scale='10m',
+                            facecolor='none', name='coastline')
+feature = ax_imerg.add_feature(coast, edgecolor='black')
+plot2 = ax_imerg.pcolormesh(imerg_data_lon,imerg_data_lat,percentile_transposed, cmap='Blues',vmin = np.nanmin(contours),vmax = np.nanmax(contours))
+#plot2 = ax_imerg.pcolormesh([0,1], cmap='Blues')
+
+ax_imerg.set_title('IMERG',fontsize = 22,fontweight = 'bold')
+#fig.colorbar(plot2,ax = ax_imerg,shrink = 0.5)
+
+
+#Third plot: CPC
+contours = np.linspace(0.5,30,num=40)
+ax_cpc = fig.add_subplot(3,1,1,projection=ccrs.PlateCarree())
+ax_cpc.set_extent([-74.041867, -71.85615, 40.541722, 41.292377])
+gl = ax_cpc.gridlines(draw_labels=True,alpha = 0.3)
+gl.xlabels_top = gl.ylabels_right = False
+gl.xformatter = LONGITUDE_FORMATTER
+gl.yformatter = LATITUDE_FORMATTER
+gl.xlabel_style = {'size': 15}
+gl.ylabel_style = {'size': 15}
+coast = NaturalEarthFeature(category='physical', scale='10m',
+                            facecolor='none', name='coastline')
+feature = ax_cpc.add_feature(coast, edgecolor='black')
+plot3 = ax_cpc.pcolormesh(new_data_lon,data_lat,percentile_averaged, cmap='Blues',vmin = np.nanmin(contours),vmax = np.nanmax(contours))
+#plot3 = ax_cpc.pcolormesh([0,1], cmap='Blues')
+
+ax_cpc.set_title('CPC',fontsize = 22,fontweight = 'bold')
+#fig.colorbar(plot3,ax = ax_cpc,shrink = 0.5)
+
+
+
+
+# Set figure title
+#fig.suptitle('Impacts of Resolution on Long Islands Annual Daily Precipitation (in mm)', fontsize=24)
+#fig.colorbar(plot3,orientation = 'horizontal')
+#plt.show()
+#plt.savefig('/home/metlab/austinreedpythonscripts/allpngfiles/testpanelplot_7-15-21.png')
+
+plt.savefig('/home/metlab/austinreedpythonscripts/allpngfiles/panelplot_95thspatialprecip_commontime_8-26-21.png')
